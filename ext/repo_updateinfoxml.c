@@ -113,6 +113,7 @@ struct parsedata {
   Id pkghandle;
   struct solv_xmlparser xmlp;
   struct joindata jd;
+  Id collhandle;
 };
 
 /*
@@ -287,6 +288,12 @@ startElement(struct solv_xmlparser *xmlp, int state, const char *name, const cha
       }
       break;
 
+    case STATE_COLLECTION:
+      {
+        pd->collhandle = repodata_new_handle(pd->data);
+      }
+      break;
+
       /*   <package arch="ppc64" name="imlib-debuginfo" release="6.fc8"
        *            src="http://download.fedoraproject.org/pub/fedora/linux/updates/8/ppc64/imlib-debuginfo-1.9.15-6.fc8.ppc64.rpm"
        *            version="1.9.15">
@@ -296,19 +303,54 @@ startElement(struct solv_xmlparser *xmlp, int state, const char *name, const cha
        */
     case STATE_PACKAGE:
       {
-	const char *arch = 0, *name = 0;
 	Id evr = makeevr_atts(pool, pd, atts); /* parse "epoch", "version", "release" */
-	Id n, a, id;
+    const char *arch = 0, *name = 0, *epoch_version_release = 0;
+    Id n = 0, a = 0, id;
+
+    char *nevra_tmp, *nevra = 0;
+    int l = 0;
 
 	for (; *atts; atts += 2)
 	  {
 	    if (!strcmp(*atts, "arch"))
+        {
 	      arch = atts[1];
+          l += strlen(arch) + 1;
+        }
 	    else if (!strcmp(*atts, "name"))
+        {
 	      name = atts[1];
+          l += strlen(name) + 1;
+        }
 	  }
-	n = name ? pool_str2id(pool, name, 1) : 0;
-	a = arch ? pool_str2id(pool, arch, 1) : 0;
+
+    epoch_version_release = pool_id2str(pool, evr);
+    l += strlen(epoch_version_release) + 1;
+    nevra_tmp = nevra = solv_xmlparser_contentspace(&pd->xmlp, l);
+
+    if (name)
+    {
+        n = pool_str2id(pool, name, 1);
+        strcpy(nevra_tmp, name);
+        nevra_tmp += strlen(nevra_tmp);
+        *nevra_tmp++ = '-';
+    }
+
+    if (epoch_version_release)
+    {
+        strcpy(nevra_tmp, epoch_version_release);
+        nevra_tmp += strlen(nevra_tmp);
+        *nevra_tmp++ = '.';
+    }
+
+    if (arch)
+    {
+        a = pool_str2id(pool, arch, 1);
+        strcpy(nevra_tmp, arch);
+        nevra_tmp += strlen(nevra_tmp);
+        *nevra_tmp++ = '\0';
+
+    }
 
 	/* generated conflicts for the package */
 	if (a && a != ARCH_NOARCH)
@@ -332,38 +374,83 @@ startElement(struct solv_xmlparser *xmlp, int state, const char *name, const cha
 	repodata_set_id(pd->data, pd->pkghandle, UPDATE_COLLECTION_EVR, evr);
 	if (a)
 	  repodata_set_id(pd->data, pd->pkghandle, UPDATE_COLLECTION_ARCH, a);
+      repodata_add_poolstr_array(pd->data, pd->collhandle, UPDATE_COLLECTION, nevra);
         break;
       }
     case STATE_MODULE:
       {
         const char *name = 0, *stream = 0, *version = 0, *context = 0, *arch = 0;
+        char *nsvca_tmp, *nsvca = 0;
         Id module_handle;
+        int l = 0;
 
         for (; *atts; atts += 2)
           {
             if (!strcmp(*atts, "arch"))
+            {
               arch = atts[1];
+              l += strlen(arch) + 1;
+            }
             else if (!strcmp(*atts, "name"))
+            {
               name = atts[1];
+              l += strlen(name) + 1;
+            }
             else if (!strcmp(*atts, "stream"))
+            {
               stream = atts[1];
+              l += strlen(stream) + 1;
+            }
             else if (!strcmp(*atts, "version"))
+            {
               version = atts[1];
+              l += strlen(version) + 1;
+            }
             else if (!strcmp(*atts, "context"))
+            {
               context = atts[1];
+              l += strlen(context) + 1;
+            }
           }
+        nsvca_tmp = nsvca = solv_xmlparser_contentspace(&pd->xmlp, l);
         module_handle = repodata_new_handle(pd->data);
 	if (name)
+    {
           repodata_set_poolstr(pd->data, module_handle, UPDATE_MODULE_NAME, name);
+          strcpy(nsvca_tmp, name);
+          nsvca_tmp += strlen(nsvca_tmp);
+          *nsvca_tmp++ = ':';
+    }
 	if (stream)
+    {
           repodata_set_poolstr(pd->data, module_handle, UPDATE_MODULE_STREAM, stream);
+          strcpy(nsvca_tmp, stream);
+          nsvca_tmp += strlen(nsvca_tmp);
+          *nsvca_tmp++ = ':';
+    }
 	if (version)
+    {
           repodata_set_poolstr(pd->data, module_handle, UPDATE_MODULE_VERSION, version);
+          strcpy(nsvca_tmp, version);
+          nsvca_tmp += strlen(nsvca_tmp);
+          *nsvca_tmp++ = ':';
+    }
 	if (context)
+    {
           repodata_set_poolstr(pd->data, module_handle, UPDATE_MODULE_CONTEXT, context);
-        if (arch)
+          strcpy(nsvca_tmp, context);
+          nsvca_tmp += strlen(nsvca_tmp);
+          *nsvca_tmp++ = ':';
+    }
+    if (arch)
+    {
           repodata_set_poolstr(pd->data, module_handle, UPDATE_MODULE_ARCH, arch);
-        repodata_add_flexarray(pd->data, pd->handle, UPDATE_MODULE, module_handle);
+          strcpy(nsvca_tmp, arch);
+          nsvca_tmp += strlen(nsvca_tmp);
+          *nsvca_tmp = 0;
+    }
+    repodata_add_flexarray(pd->data, pd->handle, UPDATE_MODULE, module_handle);
+    repodata_add_poolstr_array(pd->data, pd->collhandle, UPDATE_MODULE, nsvca);
         break;
       }
 
@@ -425,6 +512,11 @@ endElement(struct solv_xmlparser *xmlp, int state, char *content)
        */
     case STATE_MESSAGE:
       repodata_set_str(pd->data, pd->handle, UPDATE_MESSAGE, content);
+      break;
+
+    case STATE_COLLECTION:
+      repodata_add_flexarray(pd->data, pd->handle, UPDATE_COLLECTIONLIST, pd->collhandle);
+      pd->collhandle = 0;
       break;
 
     case STATE_PACKAGE:
